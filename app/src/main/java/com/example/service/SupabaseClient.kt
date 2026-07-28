@@ -5,10 +5,8 @@ import com.example.data.models.*
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.Interceptor
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -155,9 +153,12 @@ object SupabaseClient {
         val original = chain.request()
         val builder = original.newBuilder()
             .header("apikey", ANON_KEY)
-            .header("Authorization", "Bearer ${currentAuthToken ?: ANON_KEY}")
             .header("Prefer", "return=representation")
-        
+
+        currentAuthToken?.let { token ->
+            builder.header("Authorization", "Bearer $token")
+        }
+
         chain.proceed(builder.build())
     }
 
