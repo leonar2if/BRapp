@@ -7,131 +7,325 @@ import kotlinx.coroutines.withContext
 import java.util.UUID
 
 class AuthService {
+
     private val api = SupabaseClient.api
 
-    suspend fun login(phone: String, pass: String): Result<Profile> = withContext(Dispatchers.IO) {
+    private fun getErrorMessage(e: Exception): String {
+        return when {
+            e.message?.contains("Unable to resolve host") == true ->
+                "Sin conexión a internet"
+
+            e.message?.contains("401") == true ->
+                "Credenciales incorrectas"
+
+            e.message?.contains("404") == true ->
+                "Endpoint no encontrado. Revisa la URL de Supabase"
+
+            e.message?.contains("500") == true ->
+                "Error interno del servidor Supabase"
+
+            else ->
+                e.message ?: "Error desconocido"
+        }
+    }
+
+
+    suspend fun login(
+        phone: String,
+        pass: String
+    ): Result<Profile> = withContext(Dispatchers.IO) {
+
         try {
+
             val cleanPhone = Validators.cleanPhoneNumber(phone)
             val email = "$cleanPhone@barberia.rodriguez"
 
-            // 1. First check if profile exists directly by phone (in case admin or pre-created user exists without email)
+
             val existingProfiles = try {
+
                 api.getProfileByPhone("eq.$cleanPhone")
+
             } catch (e: Exception) {
-                emptyList()
+
+                throw Exception(
+                    "Error buscando usuario: ${getErrorMessage(e)}"
+                )
             }
 
-            // 2. Try GoTrue password login
+
             try {
-                val authRes = api.login(mapOf("email" to email, "password" to pass))
-                if (authRes.access_token != null && authRes.user != null) {
-                    SupabaseClient.currentAuthToken = authRes.access_token
-                    
-                    // Fetch profile
-                    val profList = try {
-                        api.getProfileById("eq.${authRes.user.id}")
-                    } catch (e: Exception) {
-                        emptyList()
-                    }
-                    val profile = profList.firstOrNull() ?: existingProfiles.firstOrNull() ?: Profile(
+
+                val authRes = api.login(
+                    mapOf(
+                        "email" to email,
+                        "password" to pass
+                    )
+                )
+
+
+                if (authRes.access_token == null || authRes.user == null) {
+
+                    return@withContext Result.failure(
+                        Exception("Supabase no devolvió sesión")
+                    )
+
+                }
+
+
+                SupabaseClient.currentAuthToken =
+                    authRes.access_token
+
+
+                val profile = try {
+
+                    api.getProfileById(
+                        "eq.${authRes.user.id}"
+                    ).firstOrNull()
+
+                } catch (e: Exception) {
+
+                    throw Exception(
+                        "Usuario autenticado pero error cargando perfil: ${getErrorMessage(e)}"
+                    )
+                }
+
+
+                return@withContext Result.success(
+                    profile ?: Profile(
                         id = authRes.user.id,
                         phone = cleanPhone,
                         fullName = "Cliente",
                         role = "client"
                     )
-                    return@withContext Result.success(profile)
-                }
+                )
+
+
             } catch (e: Exception) {
-                // If GoTrue fails, check if we found a profile directly and it's admin or client with custom login fallback
+
+
                 if (existingProfiles.isNotEmpty()) {
-                    val p = existingProfiles.first()
-                    // Allow login for pre-created profiles if password matches a simple rule or standard admin pass
-                    if (pass == "admin123" || pass == "barberia123" || pass.length >= 6) {
-                        return@withContext Result.success(p)
-                    }
+
+                    val profile = existingProfiles.first()
+
+
+                    return@withContext Result.failure(
+                        Exception(
+                            "Existe el usuario pero falló autenticación Supabase: ${getErrorMessage(e)}"
+                        )
+                    )
+
                 }
-                return@withContext Result.failure(Exception("Teléfono o contraseña incorrecta"))
+
+
+                return@withContext Result.failure(
+                    Exception(
+                        "Login falló: ${getErrorMessage(e)}"
+                    )
+                )
+
             }
 
-            if (existingProfiles.isNotEmpty()) {
-                val p = existingProfiles.first()
-                if (pass == "admin123" || pass == "barberia123" || pass.length >= 6) {
-                    return@withContext Result.success(p)
-                }
-            }
 
-            Result.failure(Exception("Credenciales no válidas. Verifica tu teléfono y contraseña."))
         } catch (e: Exception) {
-            Result.failure(e)
+
+            Result.failure(
+                Exception(
+                    "Error login: ${getErrorMessage(e)}"
+                )
+            )
         }
     }
 
-    suspend fun register(phone: String, fullName: String, pass: String): Result<Profile> = withContext(Dispatchers.IO) {
+
+
+    suspend fun register(
+        phone: String,
+        fullName: String,
+        pass: String
+    ): Result<Profile> = withContext(Dispatchers.IO) {
+
+
         try {
-            val cleanPhone = Validators.cleanPhoneNumber(phone)
-            
-            // Check if phone already exists
+
+            val cleanPhone =
+                Validators.cleanPhoneNumber(phone)
+
+
             val existing = try {
-                api.getProfileByPhone("eq.$cleanPhone")
+
+                api.getProfileByPhone(
+                    "eq.$cleanPhone"
+                )
+
             } catch (e: Exception) {
-                emptyList()
-            }
-            if (existing.isNotEmpty()) {
-                return@withContext Result.failure(Exception("Este número de teléfono ya está registrado."))
+
+                throw Exception(
+                    "Error comprobando teléfono: ${getErrorMessage(e)}"
+                )
             }
 
-            val email = "$cleanPhone@barberia.rodriguez"
-            var userId = UUID.randomUUID().toString()
 
-            // Try GoTrue signup
-            try {
-                val authRes = api.signup(
+
+            if(existing.isNotEmpty()) {
+
+                return@withContext Result.failure(
+                    Exception(
+                        "Este teléfono ya está registrado"
+                    )
+                )
+
+            }
+
+
+
+            val email =
+                "$cleanPhone@barberia.rodriguez"
+
+
+            var userId =
+                UUID.randomUUID().toString()
+
+
+
+            val authRes = try {
+
+
+                api.signup(
                     mapOf(
                         "email" to email,
                         "password" to pass,
-                        "data" to mapOf("phone" to cleanPhone, "full_name" to fullName, "role" to "client")
+                        "data" to mapOf(
+                            "phone" to cleanPhone,
+                            "full_name" to fullName,
+                            "role" to "client"
+                        )
                     )
                 )
-                if (authRes.user != null) {
-                    userId = authRes.user.id
-                    if (authRes.access_token != null) {
-                        SupabaseClient.currentAuthToken = authRes.access_token
-                    }
-                }
+
+
             } catch (e: Exception) {
-                // Ignore GoTrue error if auth disabled or custom, proceed to create profile
+
+
+                throw Exception(
+                    "Error creando usuario Supabase: ${getErrorMessage(e)}"
+                )
+
             }
 
-            val newProfile = Profile(
+
+
+            if(authRes.user != null) {
+
+                userId = authRes.user.id
+
+            }
+
+
+            if(authRes.access_token != null) {
+
+                SupabaseClient.currentAuthToken =
+                    authRes.access_token
+
+            }
+
+
+
+            val profile = Profile(
                 id = userId,
                 phone = cleanPhone,
                 fullName = fullName,
                 role = "client"
             )
 
-            try {
-                val created = api.createProfile(newProfile)
-                val p = created.firstOrNull() ?: newProfile
-                Result.success(p)
-            } catch (e: Exception) {
-                Result.success(newProfile)
+
+
+            val created = try {
+
+                api.createProfile(profile)
+
+            } catch(e: Exception) {
+
+
+                throw Exception(
+                    "Usuario creado pero error guardando perfil: ${getErrorMessage(e)}"
+                )
+
             }
-        } catch (e: Exception) {
-            Result.failure(e)
+
+
+
+            Result.success(
+                created.firstOrNull() ?: profile
+            )
+
+
+
+        } catch(e: Exception) {
+
+
+            Result.failure(
+                Exception(
+                    "Registro falló: ${getErrorMessage(e)}"
+                )
+            )
+
         }
+
     }
 
-    suspend fun updatePhone(userId: String, newPhone: String): Result<Profile> = withContext(Dispatchers.IO) {
+
+
+    suspend fun updatePhone(
+        userId: String,
+        newPhone: String
+    ): Result<Profile> = withContext(Dispatchers.IO) {
+
+
         try {
-            val cleanPhone = Validators.cleanPhoneNumber(newPhone)
-            val updated = api.updateProfile("eq.$userId", mapOf("phone" to cleanPhone))
-            if (updated.isNotEmpty()) {
-                Result.success(updated.first())
+
+
+            val cleanPhone =
+                Validators.cleanPhoneNumber(newPhone)
+
+
+
+            val updated = api.updateProfile(
+                "eq.$userId",
+                mapOf(
+                    "phone" to cleanPhone
+                )
+            )
+
+
+
+            if(updated.isNotEmpty()) {
+
+                Result.success(
+                    updated.first()
+                )
+
             } else {
-                Result.failure(Exception("Error al actualizar teléfono"))
+
+                Result.failure(
+                    Exception(
+                        "Supabase no actualizó ningún registro"
+                    )
+                )
+
             }
-        } catch (e: Exception) {
-            Result.failure(e)
+
+
+
+        } catch(e: Exception) {
+
+
+            Result.failure(
+                Exception(
+                    "Error actualizando teléfono: ${getErrorMessage(e)}"
+                )
+            )
+
         }
+
     }
 }
